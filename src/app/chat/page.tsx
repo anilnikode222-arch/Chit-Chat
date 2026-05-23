@@ -59,7 +59,8 @@ import {
   query, 
   where, 
   orderBy, 
-  onSnapshot 
+  onSnapshot,
+  deleteDoc
 } from "firebase/firestore";
 import { 
   ref as rtdbRef, 
@@ -72,123 +73,9 @@ import {
 } from "firebase/database";
 
 // Define mock contacts
-const INITIAL_SESSIONS: ChatSession[] = [
-  {
-    chatId: "alice_session",
-    type: "private",
-    members: ["local_user", "alice"],
-    displayName: "Alice Vance (Security Auditor)",
-    photoURL: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&auto=format&fit=crop&q=80",
-    lastMessage: {
-      senderId: "alice",
-      timestamp: Date.now() - 300000,
-      textPreview: "Double Ratchet keys rotated. Ready for manual penetration check."
-    }
-  },
-  {
-    chatId: "bob_session",
-    type: "private",
-    members: ["local_user", "bob"],
-    displayName: "Bob Miller (Core Cryptographer)",
-    photoURL: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80",
-    lastMessage: {
-      senderId: "local_user",
-      timestamp: Date.now() - 1800000,
-      textPreview: "Sent files are fully encrypted at the application layer."
-    }
-  },
-  {
-    chatId: "cryptology_group",
-    type: "group",
-    members: ["local_user", "alice", "bob"],
-    displayName: "ChitChat Cryptology Core",
-    photoURL: "", // Render custom group icon
-    lastMessage: {
-      senderId: "bob",
-      timestamp: Date.now() - 3600000,
-      textPreview: "Broadcast Sender Key derived for all group nodes."
-    }
-  }
-];
+const INITIAL_SESSIONS: ChatSession[] = [];
 
-const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
-  "alice_session": [
-    {
-      messageId: "m1",
-      senderId: "alice",
-      timestamp: Date.now() - 900000,
-      decryptedText: "Hello there! I've validated your X25519 identity key. Let's start the ratchet exchange.",
-      cipherText: "W1ZhbGlkYXRlZF9YMjU1MTldIENoaXRDaGF0IFRlc3QgRW52ZWxvcGUgLSBDb2RlUGFzc2Vk",
-      iv: "YTVzOGRmOWFzZGY4OWFzZA==",
-      tag: "OTBzOGRmOWFzZGY4OWFzZA==",
-      status: "seen"
-    },
-    {
-      messageId: "m2",
-      senderId: "local_user",
-      timestamp: Date.now() - 600000,
-      decryptedText: "Perfect. PBKDF2 master encryption key successfully locks the local database.",
-      cipherText: "TG9jYWwgVmF1bHQgbG9ja2VkIHdpdGggUEJLUERGMiBzZWxlY3RpdmUgY2lwaGVycw==",
-      iv: "OGFzOGRmOWFzZGY4OWFzZA==",
-      tag: "OTBzOGRmOWFzZGY4OWFzZA==",
-      status: "seen"
-    },
-    {
-      messageId: "m3",
-      senderId: "alice",
-      timestamp: Date.now() - 300000,
-      decryptedText: "Double Ratchet keys rotated. Ready for manual penetration check.",
-      cipherText: "S2V5cyByb3RhdGVkLiBObyBtZXRhZGF0YSBsZWFrcyBhbGxvd2VkLg==",
-      iv: "N2FzOGRmOWFzZGY4OWFzZA==",
-      tag: "OTBzOGRmOWFzZGY4OWFzZA==",
-      status: "seen"
-    }
-  ],
-  "bob_session": [
-    {
-      messageId: "m4",
-      senderId: "bob",
-      timestamp: Date.now() - 3600000,
-      decryptedText: "Did you verify storage bucket rule integrity?",
-      cipherText: "VmVyaWZ5IGJ1Y2tldCBydWxlcyBvbiBGaXJlYmFzZSBTdG9yYWdlLg==",
-      iv: "M2FzOGRmOWFzZGY4OWFzZA==",
-      tag: "OTBzOGRmOWFzZGY4OWFzZA==",
-      status: "seen"
-    },
-    {
-      messageId: "m5",
-      senderId: "local_user",
-      timestamp: Date.now() - 1800000,
-      decryptedText: "Yes, verified! Storage rules strictly reject non-application/octet-stream content types to enforce E2EE media blobs.",
-      cipherText: "RW5mb3JjZSBvY3RldC1zdHJlYW0gdHlwZXMgdG8gcHJldmVudCBwbGFpbnRleHQgcmVhZHMu",
-      iv: "NGFzOGRmOWFzZGY4OWFzZA==",
-      tag: "OTBzOGRmOWFzZGY4OWFzZA==",
-      status: "seen"
-    }
-  ],
-  "cryptology_group": [
-    {
-      messageId: "m6",
-      senderId: "alice",
-      timestamp: Date.now() - 7200000,
-      decryptedText: "I've joined the multi-node conversation group.",
-      cipherText: "TWV0YSBOb2RlIEpvaW5lZC4gRzJFRSBzZW5kZXIga2V5cyBzeW5jZWQu",
-      iv: "NWFzOGRmOWFzZGY4OWFzZA==",
-      tag: "OTBzOGRmOWFzZGY4OWFzZA==",
-      status: "seen"
-    },
-    {
-      messageId: "m7",
-      senderId: "bob",
-      timestamp: Date.now() - 3600000,
-      decryptedText: "Broadcast Sender Key derived for all group nodes.",
-      cipherText: "U2VuZGVyIGtleSByYXRjaGV0IGFjdGl2YXRlZCBmb3IgYnJvYWRjYXN0IGRvbWFpbi4=",
-      iv: "NmFzOGRmOWFzZGY4OWFzZA==",
-      tag: "OTBzOGRmOWFzZGY4OWFzZA==",
-      status: "seen"
-    }
-  ]
-};
+const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {};
 
 export default function ChatDashboard() {
   const router = useRouter();
@@ -251,6 +138,112 @@ export default function ChatDashboard() {
   const [publicGroups, setPublicGroups] = useState<any[]>([]);
   const [newChatError, setNewChatError] = useState<string | null>(null);
   const [newChatLoading, setNewChatLoading] = useState(false);
+
+  // Edit Username state
+  const [showEditUsernameModal, setShowEditUsernameModal] = useState(false);
+  const [newUsernameInput, setNewUsernameInput] = useState("");
+  const [editUsernameError, setEditUsernameError] = useState<string | null>(null);
+  const [editUsernameLoading, setEditUsernameLoading] = useState(false);
+
+  const handleUpdateUsername = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profile?.uid || !newUsernameInput.trim()) return;
+
+    const newUsername = newUsernameInput.trim().toLowerCase();
+    const oldUsername = profile.username;
+
+    if (newUsername === oldUsername) {
+      setShowEditUsernameModal(false);
+      return;
+    }
+
+    const regex = /^[a-zA-Z0-9_]{5,}$/;
+    if (!regex.test(newUsername)) {
+      setEditUsernameError("Username must be at least 5 alphanumeric characters or underscores.");
+      return;
+    }
+
+    setEditUsernameLoading(true);
+    setEditUsernameError(null);
+
+    try {
+      // 1. Check if new username is already taken in RTDB
+      const userRef = rtdbRef(rtdb, `users/${newUsername}`);
+      const snapshot = await rtdbGet(userRef);
+      if (snapshot.exists() && snapshot.val().uid !== profile.uid) {
+        setEditUsernameError("Username is already taken.");
+        setEditUsernameLoading(false);
+        return;
+      }
+
+      // Also check Firestore
+      const fsUserRef = doc(db, "users", newUsername);
+      const fsUserSnap = await getDoc(fsUserRef);
+      if (fsUserSnap.exists() && fsUserSnap.data().uid !== profile.uid) {
+        setEditUsernameError("Username is already taken.");
+        setEditUsernameLoading(false);
+        return;
+      }
+
+      // 2. Write new username record to RTDB
+      await rtdbSet(rtdbRef(rtdb, `users/${newUsername}`), {
+        uid: profile.uid,
+        displayName: profile.displayName || profile.username,
+        publicKey: profile.publicKey,
+        createdAt: rtdbTimestamp()
+      });
+
+      // 3. Remove old username record from RTDB
+      await rtdbSet(rtdbRef(rtdb, `users/${oldUsername}`), null);
+
+      // 4. Update profile in Firestore (write new doc, delete old doc)
+      const newProfileData = {
+        ...profile,
+        username: newUsername
+      };
+      await setDoc(fsUserRef, newProfileData);
+      try {
+        const fsOldUserRef = doc(db, "users", oldUsername);
+        await deleteDoc(fsOldUserRef);
+      } catch (err) {
+        console.warn("Could not delete old Firestore mapping:", err);
+      }
+
+      // 5. Update status / presence record in RTDB to reflect the new username
+      try {
+        const statusRef = rtdbRef(rtdb, `status/${profile.uid}`);
+        await rtdbSet(statusRef, {
+          status: "online",
+          lastChanged: rtdbTimestamp(),
+          username: newUsername
+        });
+      } catch (err) {
+        console.warn("Could not update presence username in RTDB:", err);
+      }
+
+      // 6. Push a Username Updated activity log to RTDB
+      try {
+        const activityRef = rtdbPush(rtdbRef(rtdb, `activities/${profile.uid}`));
+        await rtdbSet(activityRef, {
+          action: "Username Updated",
+          timestamp: rtdbTimestamp(),
+          details: `Username updated from @${oldUsername} to @${newUsername}.`
+        });
+      } catch (err) {
+        console.warn("Could not log username update activity in RTDB:", err);
+      }
+
+      // 7. Update Zustand state profile
+      useAuthStore.getState().setProfile(newProfileData);
+
+      setShowEditUsernameModal(false);
+    } catch (err: any) {
+      console.error("Error updating username:", err);
+      setEditUsernameError(err.message || "Failed to update username.");
+    } finally {
+      setEditUsernameLoading(false);
+    }
+  };
 
   // Vault protection redirect
   useEffect(() => {
@@ -1300,17 +1293,31 @@ export default function ChatDashboard() {
                 {profile?.displayName?.substring(0, 2).toUpperCase() || "CC"}
               </div>
               <div className="min-w-0 max-w-[125px]">
-                <h3 className="text-sm font-bold text-gray-900 dark:text-white truncate" title={profile?.displayName || "Local Node"}>
+                <h3 className="text-sm font-bold text-gray-900 dark:text-white truncate animate-fade-in" title={profile?.displayName || "Local Node"}>
                   {profile?.displayName || "Local Node"}
                 </h3>
-                <p className="text-3xs text-gray-400 dark:text-zinc-500 font-bold uppercase tracking-wider flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                <p className="text-3xs text-blue-600 dark:text-blue-400 font-extrabold truncate" title={`@${profile?.username || ""}`}>
+                  @{profile?.username || ""}
+                </p>
+                <p className="text-4xs text-gray-400 dark:text-zinc-500 font-bold uppercase tracking-wider flex items-center gap-1 mt-0.5">
+                  <span className="w-1 h-1 rounded-full bg-emerald-500 animate-ping" />
                   E2EE Secure
                 </p>
               </div>
             </div>
 
             <div className="flex items-center gap-1">
+              <button 
+                onClick={() => {
+                  setNewUsernameInput(profile?.username || "");
+                  setEditUsernameError(null);
+                  setShowEditUsernameModal(true);
+                }}
+                className="p-2 text-gray-400 hover:text-blue-500 dark:text-zinc-500 dark:hover:text-blue-400 transition-colors rounded-xl hover:bg-blue-500/10"
+                title="Edit Username Settings"
+              >
+                <Sliders className="w-4.5 h-4.5" />
+              </button>
               <button 
                 onClick={() => setShowNewChatModal(true)}
                 className="p-2 text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-colors rounded-xl hover:bg-blue-500/10 mr-1"
@@ -2373,6 +2380,91 @@ export default function ChatDashboard() {
                 )}
 
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* EDIT USERNAME MODAL OVERLAY */}
+      <AnimatePresence>
+        {showEditUsernameModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            {/* Backdrop */}
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowEditUsernameModal(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+
+            {/* Modal Box */}
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 20 }}
+              className="relative w-full max-w-md bg-white dark:bg-zinc-950/90 border border-gray-100 dark:border-zinc-800/80 rounded-3xl overflow-hidden shadow-2xl p-6 z-10 backdrop-blur-xl flex flex-col gap-5 text-gray-900 dark:text-white"
+            >
+              {/* Modal Header */}
+              <div className="flex items-center justify-between border-b border-gray-100 dark:border-zinc-800/80 pb-3">
+                <h3 className="text-sm font-extrabold flex items-center gap-2 uppercase tracking-wide">
+                  <Sliders className="w-5 h-5 text-blue-500" />
+                  Edit Profile Node Settings
+                </h3>
+                <button 
+                  onClick={() => setShowEditUsernameModal(false)}
+                  className="p-1.5 text-gray-400 hover:text-gray-700 dark:hover:text-white transition-colors rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Form Area */}
+              <form onSubmit={handleUpdateUsername} className="space-y-4">
+                <div className="space-y-1.5">
+                  <div className="space-y-1">
+                    <label className="text-4xs font-bold uppercase tracking-wider text-gray-400 dark:text-zinc-500 block">
+                      Current Username: <span className="text-blue-500 font-extrabold">@{profile?.username}</span>
+                    </label>
+                    <label className="text-4xs font-bold uppercase tracking-wider text-gray-400 dark:text-zinc-500 block">
+                      New Unique Username
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-4 top-3 text-xs font-bold text-gray-400 dark:text-zinc-500">@</span>
+                      <input
+                        type="text"
+                        required
+                        placeholder="new_username"
+                        value={newUsernameInput}
+                        onChange={(e) => setNewUsernameInput(e.target.value.toLowerCase().replace(/\s+/g, ""))}
+                        className="w-full py-2.5 pl-8 pr-4 rounded-xl text-xs font-semibold glass-input text-gray-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {editUsernameError && (
+                  <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-500 text-3xs font-semibold rounded-xl flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    <span>{editUsernameError}</span>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={editUsernameLoading}
+                  className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl active:scale-[0.98] transition-all font-bold text-2xs uppercase tracking-wider shadow-lg shadow-blue-500/10 flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
+                >
+                  {editUsernameLoading ? (
+                    <RefreshCw className="w-4.5 h-4.5 animate-spin" />
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      Save Node Settings
+                    </>
+                  )}
+                </button>
+              </form>
             </motion.div>
           </div>
         )}
