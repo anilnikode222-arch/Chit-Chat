@@ -2241,6 +2241,44 @@ export default function ChatDashboard() {
                       <p className="text-4xs text-gray-400 dark:text-zinc-500 font-semibold leading-relaxed">
                         ChitChat queries the public directory for the target node's X25519 Identity Public Key to derive pairwise keys.
                       </p>
+                      
+                      <div className="mt-2.5">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setNewChatLoading(true);
+                            setNewChatError(null);
+                            try {
+                              const peerUsername = "bob_miller";
+                              const peerUid = "uid_bob_miller";
+                              const peerProfile = {
+                                uid: peerUid,
+                                username: peerUsername,
+                                displayName: "Bob Miller (E2EE Peer)",
+                                publicKey: "MOCK_X25519_PEER_PUBLIC_KEY_BASE64_INTEGRITY_CHECK",
+                                createdAt: Date.now()
+                              };
+                              // Write to Firestore and RTDB
+                              await setDoc(doc(db, "users", peerUsername), peerProfile);
+                              await rtdbSet(rtdbRef(rtdb, `users/${peerUsername}`), {
+                                uid: peerUid,
+                                displayName: peerProfile.displayName,
+                                publicKey: peerProfile.publicKey,
+                                createdAt: rtdbTimestamp()
+                              });
+                              setTargetUsername(peerUsername);
+                              alert("🚀 Successfully initialized E2EE test peer '@bob_miller' in both Firestore and RTDB! You can now start chat with '@bob_miller'.");
+                            } catch (err: any) {
+                              setNewChatError("Could not create test peer: " + err.message);
+                            } finally {
+                              setNewChatLoading(false);
+                            }
+                          }}
+                          className="w-full py-2 bg-emerald-600/10 hover:bg-emerald-600 hover:text-white text-emerald-600 dark:text-emerald-400 text-4xs font-extrabold uppercase rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 border border-emerald-500/10"
+                        >
+                          ✨ Initialize Test Peer Node (@bob_miller)
+                        </button>
+                      </div>
                     </div>
 
                     {newChatError && (
