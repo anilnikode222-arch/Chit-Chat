@@ -297,6 +297,14 @@ export default function AuthPortal() {
             username: username.toLowerCase()
           });
 
+          // Ensure username directory mapping is reconstructed in RTDB (e.g. if RTDB was wiped)
+          await rtdbSet(rtdbRef(rtdb, `users/${username.toLowerCase()}`), {
+            uid: myUid,
+            displayName: profileData.displayName || username,
+            publicKey: profileData.publicKey,
+            createdAt: rtdbTimestamp()
+          });
+
           // Set up onDisconnect to automatically toggle to offline
           const myOnDisconnect = rtdbOnDisconnect(statusRef);
           await myOnDisconnect.set({
