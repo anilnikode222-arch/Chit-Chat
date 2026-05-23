@@ -852,7 +852,8 @@ export default function ChatDashboard() {
     setNewChatError(null);
 
     try {
-      const cleanUsername = targetUsername.trim().toLowerCase();
+      // Strip leading @ symbol if present
+      const cleanUsername = targetUsername.trim().toLowerCase().replace(/^@/, "");
       
       if (cleanUsername === profile.username) {
         setNewChatError("You cannot start a secure chat with yourself.");
@@ -860,16 +861,31 @@ export default function ChatDashboard() {
         return;
       }
 
+      let userData: any = null;
+
+      // 1. First lookup in Firestore
       const userRef = doc(db, "users", cleanUsername);
       const userSnap = await getDoc(userRef);
+      if (userSnap.exists()) {
+        userData = userSnap.data();
+      } else {
+        // 2. Fallback lookup in Realtime Database
+        try {
+          const rtdbUserSnap = await rtdbGet(rtdbRef(rtdb, `users/${cleanUsername}`));
+          if (rtdbUserSnap.exists()) {
+            userData = rtdbUserSnap.val();
+          }
+        } catch (re) {
+          console.warn("RTDB username lookup fallback failed:", re);
+        }
+      }
       
-      if (!userSnap.exists()) {
+      if (!userData) {
         setNewChatError(`Secure node "${cleanUsername}" could not be located in the directory.`);
         setNewChatLoading(false);
         return;
       }
 
-      const userData = userSnap.data();
       const theirUid = userData.uid;
       const theirDisplayName = userData.displayName || cleanUsername;
       const theirPubKey = userData.publicKey;
@@ -1292,7 +1308,7 @@ export default function ChatDashboard() {
               <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white font-extrabold text-sm shadow-md shadow-blue-500/10">
                 {profile?.displayName?.substring(0, 2).toUpperCase() || "CC"}
               </div>
-              <div className="min-w-0 max-w-[125px]">
+              <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-bold text-gray-900 dark:text-white truncate animate-fade-in" title={profile?.displayName || "Local Node"}>
                   {profile?.displayName || "Local Node"}
                 </h3>

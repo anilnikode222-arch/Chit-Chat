@@ -26,7 +26,7 @@ import { saveSecureKey } from "../crypto/storage";
 import { signInWithPopup, GoogleAuthProvider, signInAnonymously } from "firebase/auth";
 import { auth, db, rtdb } from "../lib/firebase";
 import { doc, getDoc, setDoc } from "firebase/firestore";
-import { ref as rtdbRef, set as rtdbSet, push as rtdbPush, serverTimestamp as rtdbTimestamp, onDisconnect as rtdbOnDisconnect } from "firebase/database";
+import { ref as rtdbRef, set as rtdbSet, push as rtdbPush, serverTimestamp as rtdbTimestamp, onDisconnect as rtdbOnDisconnect, get as rtdbGet } from "firebase/database";
 
 export default function AuthPortal() {
   const router = useRouter();
@@ -92,14 +92,24 @@ export default function AuthPortal() {
       try {
         const docRef = doc(db, "users", name.toLowerCase());
         const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
+        
+        let taken = docSnap.exists();
+        if (!taken) {
+          try {
+            const rtdbSnap = await rtdbGet(rtdbRef(rtdb, `users/${name.toLowerCase()}`));
+            taken = rtdbSnap.exists();
+          } catch (re) {
+            console.warn("RTDB username check fallback error:", re);
+          }
+        }
+
+        if (taken) {
           setUsernameStatus('taken');
         } else {
           setUsernameStatus('available');
         }
       } catch (err) {
         console.error("Username check error:", err);
-        // If offline or rule issue, assume available for demo/resilience
         setUsernameStatus('available');
       }
     }, 400);
