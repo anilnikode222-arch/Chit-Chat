@@ -201,7 +201,11 @@ export default function ChatDashboard() {
         ...profile,
         username: newUsername
       };
-      await setDoc(fsUserRef, newProfileData);
+      try {
+        await setDoc(fsUserRef, newProfileData);
+      } catch (err) {
+        console.warn("Could not write new username profile to Firestore:", err);
+      }
       try {
         const fsOldUserRef = doc(db, "users", oldUsername);
         await deleteDoc(fsOldUserRef);
@@ -331,51 +335,51 @@ export default function ChatDashboard() {
     };
   }, [profile, updatePresence]);
 
-  // Real-time Firestore subscriptions for active Chats
+  // Real-time RTDB subscriptions for active Chats
   useEffect(() => {
     if (!profile?.uid) return;
 
-    const chatsQuery = query(
-      collection(db, "chats"),
-      where("members", "array-contains", profile.uid)
-    );
-
-    const unsubscribeChats = onSnapshot(chatsQuery, async (snapshot) => {
+    const chatsRef = rtdbRef(rtdb, "chats");
+    const unsubscribeChats = rtdbOnValue(chatsRef, (snapshot) => {
       const chatSessions: ChatSession[] = [];
       
-      snapshot.docs.forEach((docSnap) => {
-        const data = docSnap.data();
-        let displayName = data.displayName || "Secure Channel";
-        let photoURL = data.photoURL || "";
-        
-        if (data.type === "private") {
-          const otherUid = data.members.find((m: string) => m !== profile.uid);
-          const otherUsername = data.memberUsernames?.find((u: string) => u !== profile.username) || "peer";
-          displayName = (otherUid && data.memberNames?.[otherUid]) || otherUsername.toUpperCase();
-        }
+      if (snapshot.exists()) {
+        const allChats = snapshot.val();
+        Object.keys(allChats).forEach((chatId) => {
+          const chatData = allChats[chatId];
+          
+          // Check if user is a member of the chat in RTDB
+          const membersArray = chatData.members ? Object.values(chatData.members) : [];
+          if (membersArray.includes(profile.uid)) {
+            let displayName = chatData.displayName || "Secure Channel";
+            let photoURL = chatData.photoURL || "";
+            
+            if (chatData.type === "private") {
+              const otherUid = membersArray.find((m: any) => m !== profile.uid);
+              const memberUsernamesArray = chatData.memberUsernames ? Object.values(chatData.memberUsernames) : [];
+              const otherUsername = memberUsernamesArray.find((u: any) => u !== profile.username) || "peer";
+              displayName = (otherUid && chatData.memberNames?.[otherUid as string]) || String(otherUsername).toUpperCase();
+            }
 
-        chatSessions.push({
-          chatId: data.chatId,
-          type: data.type,
-          members: data.members,
-          displayName,
-          photoURL,
-          lastMessage: data.lastMessage ? {
-            senderId: data.lastMessage.senderId,
-            timestamp: data.lastMessage.timestamp,
-            textPreview: data.lastMessage.textPreview
-          } : undefined
+            chatSessions.push({
+              chatId: chatData.chatId || chatId,
+              type: chatData.type || "private",
+              members: membersArray as string[],
+              displayName,
+              photoURL,
+              lastMessage: (chatData.metadata?.lastMessage || chatData.lastMessage) ? {
+                senderId: chatData.metadata?.lastMessage?.senderId || chatData.lastMessage?.senderId,
+                timestamp: chatData.metadata?.lastMessage?.timestamp || chatData.lastMessage?.timestamp,
+                textPreview: chatData.metadata?.lastMessage?.textPreview || chatData.lastMessage?.textPreview
+              } : undefined
+            });
+          }
         });
-      });
-
-      if (chatSessions.length === 0) {
-        setChats(INITIAL_SESSIONS);
-      } else {
-        setChats(chatSessions);
       }
+
+      setChats(chatSessions);
     }, (error) => {
-      console.error("Error subscribing to chats, falling back to mock sessions:", error);
-      setChats(INITIAL_SESSIONS);
+      console.error("RTDB chats subscription error:", error);
     });
 
     return () => {
@@ -405,10 +409,31 @@ export default function ChatDashboard() {
           try {
             const otherUid = activeSession.members.find(m => m !== profile.uid);
             if (otherUid) {
-              const chatRef = doc(db, "chats", activeChatId);
-              const chatSnap = await getDoc(chatRef);
-              if (chatSnap.exists()) {
-                const chatData = chatSnap.data();
+              let chatData = null;
+              // Try RTDB first
+              try {
+                const rtdbChatSnap = await rtdbGet(rtdbRef(rtdb, `chats/${activeChatId}`));
+                if (rtdbChatSnap.exists()) {
+                  chatData = rtdbChatSnap.val();
+                }
+              } catch (re) {
+                console.warn("Could not fetch chat data from RTDB for decryption:", re);
+              }
+
+              // Fallback to Firestore
+              if (!chatData) {
+                try {
+                  const chatRef = doc(db, "chats", activeChatId);
+                  const chatSnap = await getDoc(chatRef);
+                  if (chatSnap.exists()) {
+                    chatData = chatSnap.data();
+                  }
+                } catch (fe) {
+                  console.warn("Could not fetch chat data from Firestore for decryption:", fe);
+                }
+              }
+
+              if (chatData) {
                 const otherPub = chatData.memberPublicKeys?.[otherUid];
                 const myPriv = await getSecureKey("identity_private_key");
                 if (otherPub && myPriv) {
@@ -421,10 +446,31 @@ export default function ChatDashboard() {
           }
         } else {
           try {
-            const chatRef = doc(db, "chats", activeChatId);
-            const chatSnap = await getDoc(chatRef);
-            if (chatSnap.exists()) {
-              const chatData = chatSnap.data();
+            let chatData = null;
+            // Try RTDB first
+            try {
+              const rtdbChatSnap = await rtdbGet(rtdbRef(rtdb, `chats/${activeChatId}`));
+              if (rtdbChatSnap.exists()) {
+                chatData = rtdbChatSnap.val();
+              }
+            } catch (re) {
+              console.warn("Could not fetch group data from RTDB for decryption:", re);
+            }
+
+            // Fallback to Firestore
+            if (!chatData) {
+              try {
+                const chatRef = doc(db, "chats", activeChatId);
+                const chatSnap = await getDoc(chatRef);
+                if (chatSnap.exists()) {
+                  chatData = chatSnap.data();
+                }
+              } catch (fe) {
+                console.warn("Could not fetch group data from Firestore for decryption:", fe);
+              }
+            }
+
+            if (chatData) {
               if (chatData.isPublic) {
                 const enc = new TextEncoder();
                 const hashBuffer = await crypto.subtle.digest("SHA-256", enc.encode(activeChatId));
@@ -500,7 +546,7 @@ export default function ChatDashboard() {
     };
   }, [activeChatId, profile, chats, mek, setMessages]);
 
-  // Search public groups in Firestore
+  // Search public groups in Realtime Database, fallback to Firestore
   useEffect(() => {
     if (newChatTab !== 'joinGroup' || !groupSearchQuery.trim()) {
       setPublicGroups([]);
@@ -509,19 +555,45 @@ export default function ChatDashboard() {
 
     const delayDebounce = setTimeout(async () => {
       try {
-        const q = query(
-          collection(db, "chats"),
-          where("type", "==", "group"),
-          where("isPublic", "==", true)
-        );
-        const querySnapshot = await getDocs(q);
-        const groups: any[] = [];
-        querySnapshot.forEach((docSnap) => {
-          const data = docSnap.data();
-          if (data.displayName?.toLowerCase().includes(groupSearchQuery.toLowerCase())) {
-            groups.push(data);
+        let groups: any[] = [];
+        let rtdbSuccess = false;
+
+        // Try RTDB first
+        try {
+          const rtdbChatsSnap = await rtdbGet(rtdbRef(rtdb, "chats"));
+          if (rtdbChatsSnap.exists()) {
+            const chatsVal = rtdbChatsSnap.val();
+            groups = Object.values(chatsVal).filter((c: any) => 
+              c.type === "group" && 
+              c.isPublic === true &&
+              String(c.displayName || "").toLowerCase().includes(groupSearchQuery.toLowerCase())
+            );
+            rtdbSuccess = true;
           }
-        });
+        } catch (re) {
+          console.warn("Could not fetch public groups from RTDB:", re);
+        }
+
+        // Fallback to Firestore
+        if (!rtdbSuccess) {
+          try {
+            const q = query(
+              collection(db, "chats"),
+              where("type", "==", "group"),
+              where("isPublic", "==", true)
+            );
+            const querySnapshot = await getDocs(q);
+            querySnapshot.forEach((docSnap) => {
+              const data = docSnap.data();
+              if (data.displayName?.toLowerCase().includes(groupSearchQuery.toLowerCase())) {
+                groups.push(data);
+              }
+            });
+          } catch (fe) {
+            console.error("Error searching public groups in Firestore fallback:", fe);
+          }
+        }
+
         setPublicGroups(groups);
       } catch (err) {
         console.error("Error searching public groups:", err);
@@ -662,10 +734,31 @@ export default function ChatDashboard() {
         try {
           const otherUid = activeSession.members.find(m => m !== profile.uid);
           if (otherUid) {
-            const chatRef = doc(db, "chats", activeChatId);
-            const chatSnap = await getDoc(chatRef);
-            if (chatSnap.exists()) {
-              const chatData = chatSnap.data();
+            let chatData = null;
+            // Try RTDB first
+            try {
+              const rtdbChatSnap = await rtdbGet(rtdbRef(rtdb, `chats/${activeChatId}`));
+              if (rtdbChatSnap.exists()) {
+                chatData = rtdbChatSnap.val();
+              }
+            } catch (re) {
+              console.warn("Could not fetch chat data from RTDB for message encryption:", re);
+            }
+
+            // Fallback to Firestore
+            if (!chatData) {
+              try {
+                const chatRef = doc(db, "chats", activeChatId);
+                const chatSnap = await getDoc(chatRef);
+                if (chatSnap.exists()) {
+                  chatData = chatSnap.data();
+                }
+              } catch (fe) {
+                console.warn("Could not fetch chat data from Firestore for message encryption:", fe);
+              }
+            }
+
+            if (chatData) {
               const otherPub = chatData.memberPublicKeys?.[otherUid];
               const myPriv = await getSecureKey("identity_private_key");
               if (otherPub && myPriv) {
@@ -679,10 +772,31 @@ export default function ChatDashboard() {
       } else {
         // Group key
         try {
-          const chatRef = doc(db, "chats", activeChatId);
-          const chatSnap = await getDoc(chatRef);
-          if (chatSnap.exists()) {
-            const chatData = chatSnap.data();
+          let chatData = null;
+          // Try RTDB first
+          try {
+            const rtdbChatSnap = await rtdbGet(rtdbRef(rtdb, `chats/${activeChatId}`));
+            if (rtdbChatSnap.exists()) {
+              chatData = rtdbChatSnap.val();
+            }
+          } catch (re) {
+            console.warn("Could not fetch group data from RTDB for message encryption:", re);
+          }
+
+          // Fallback to Firestore
+          if (!chatData) {
+            try {
+              const chatRef = doc(db, "chats", activeChatId);
+              const chatSnap = await getDoc(chatRef);
+              if (chatSnap.exists()) {
+                chatData = chatSnap.data();
+              }
+            } catch (fe) {
+              console.warn("Could not fetch group data from Firestore for message encryption:", fe);
+            }
+          }
+
+          if (chatData) {
             if (chatData.isPublic) {
               const enc = new TextEncoder();
               const hashBuffer = await crypto.subtle.digest("SHA-256", enc.encode(activeChatId));
@@ -752,14 +866,18 @@ export default function ChatDashboard() {
           }
         };
 
-        await addDoc(collection(db, "chats", activeChatId, "messages"), newMessage);
-        await updateDoc(doc(db, "chats", activeChatId), {
-          lastMessage: {
-            senderId: profile.uid,
-            timestamp: Date.now(),
-            textPreview: `🔒 Encrypted Media (${attachment.type.split("/")[0]})`
-          }
-        });
+        try {
+          await addDoc(collection(db, "chats", activeChatId, "messages"), newMessage);
+          await updateDoc(doc(db, "chats", activeChatId), {
+            lastMessage: {
+              senderId: profile.uid,
+              timestamp: Date.now(),
+              textPreview: `🔒 Encrypted Media (${attachment.type.split("/")[0]})`
+            }
+          });
+        } catch (fe) {
+          console.warn("Could not save media message or update preview in Firestore:", fe);
+        }
 
         // Mirror E2EE message and metadata to RTDB
         try {
@@ -802,14 +920,18 @@ export default function ChatDashboard() {
           replyToMessageId: replyingTo?.messageId || null
         };
 
-        await addDoc(collection(db, "chats", activeChatId, "messages"), newMessage);
-        await updateDoc(doc(db, "chats", activeChatId), {
-          lastMessage: {
-            senderId: profile.uid,
-            timestamp: Date.now(),
-            textPreview: textToSend
-          }
-        });
+        try {
+          await addDoc(collection(db, "chats", activeChatId, "messages"), newMessage);
+          await updateDoc(doc(db, "chats", activeChatId), {
+            lastMessage: {
+              senderId: profile.uid,
+              timestamp: Date.now(),
+              textPreview: textToSend
+            }
+          });
+        } catch (fe) {
+          console.warn("Could not save text message or update preview in Firestore:", fe);
+        }
 
         // Mirror E2EE message and metadata to RTDB
         try {
@@ -863,20 +985,26 @@ export default function ChatDashboard() {
 
       let userData: any = null;
 
-      // 1. First lookup in Firestore
-      const userRef = doc(db, "users", cleanUsername);
-      const userSnap = await getDoc(userRef);
-      if (userSnap.exists()) {
-        userData = userSnap.data();
-      } else {
-        // 2. Fallback lookup in Realtime Database
+      // 1. First lookup in Realtime Database (Primary Directory)
+      try {
+        const rtdbUserSnap = await rtdbGet(rtdbRef(rtdb, `users/${cleanUsername}`));
+        if (rtdbUserSnap.exists()) {
+          userData = rtdbUserSnap.val();
+        }
+      } catch (re) {
+        console.warn("RTDB username lookup failed, trying Firestore:", re);
+      }
+
+      // 2. Fallback lookup in Firestore
+      if (!userData) {
         try {
-          const rtdbUserSnap = await rtdbGet(rtdbRef(rtdb, `users/${cleanUsername}`));
-          if (rtdbUserSnap.exists()) {
-            userData = rtdbUserSnap.val();
+          const userRef = doc(db, "users", cleanUsername);
+          const userSnap = await getDoc(userRef);
+          if (userSnap.exists()) {
+            userData = userSnap.data();
           }
-        } catch (re) {
-          console.warn("RTDB username lookup fallback failed:", re);
+        } catch (fe) {
+          console.warn("Firestore username lookup fallback failed:", fe);
         }
       }
       
@@ -897,10 +1025,28 @@ export default function ChatDashboard() {
       }
 
       const existingChatId = `chat_${profile.uid < theirUid ? profile.uid + "_" + theirUid : theirUid + "_" + profile.uid}`;
-      const chatRef = doc(db, "chats", existingChatId);
-      const chatSnap = await getDoc(chatRef);
+      let chatExists = false;
 
-      if (chatSnap.exists()) {
+      // 1. Try checking in RTDB first
+      try {
+        const rtdbChatSnap = await rtdbGet(rtdbRef(rtdb, `chats/${existingChatId}`));
+        chatExists = rtdbChatSnap.exists();
+      } catch (re) {
+        console.warn("RTDB chat existence check failed:", re);
+      }
+
+      // 2. Fallback checking in Firestore
+      if (!chatExists) {
+        try {
+          const chatRef = doc(db, "chats", existingChatId);
+          const chatSnap = await getDoc(chatRef);
+          chatExists = chatSnap.exists();
+        } catch (fe) {
+          console.warn("Firestore chat existence check failed:", fe);
+        }
+      }
+
+      if (chatExists) {
         setActiveChatId(existingChatId);
         setShowNewChatModal(false);
         setNewChatLoading(false);
@@ -930,7 +1076,20 @@ export default function ChatDashboard() {
         createdAt: Date.now()
       };
 
-      await setDoc(chatRef, newChatData);
+      // Backup write to Firestore (if permissions allow)
+      try {
+        const chatRef = doc(db, "chats", existingChatId);
+        await setDoc(chatRef, newChatData);
+      } catch (fe) {
+        console.warn("Could not write chat session details to Firestore:", fe);
+      }
+
+      // Write E2EE chat session details to RTDB directly (guarantees flawless access)
+      try {
+        await rtdbSet(rtdbRef(rtdb, `chats/${existingChatId}`), newChatData);
+      } catch (re) {
+        console.warn("Could not write chat session details to RTDB:", re);
+      }
       
       const sysMsgId = `msg_system_${Date.now()}`;
       const sysMsg = {
@@ -940,7 +1099,11 @@ export default function ChatDashboard() {
         decryptedText: "🔒 Direct E2EE messaging channel successfully computed via X25519 Diffie-Hellman handshakes. Secrecy keys derived client-side."
       };
 
-      await addDoc(collection(db, "chats", existingChatId, "messages"), sysMsg);
+      try {
+        await addDoc(collection(db, "chats", existingChatId, "messages"), sysMsg);
+      } catch (fe) {
+        console.warn("Could not write system message to Firestore:", fe);
+      }
 
       // Mirror system message and metadata to RTDB
       try {
@@ -1031,7 +1194,19 @@ export default function ChatDashboard() {
         newGroupData.encryptedKeys = encryptedKeys;
       }
 
-      await setDoc(doc(db, "chats", newGroupId), newGroupData);
+      // Backup write to Firestore (if permissions allow)
+      try {
+        await setDoc(doc(db, "chats", newGroupId), newGroupData);
+      } catch (fe) {
+        console.warn("Could not write group session details to Firestore:", fe);
+      }
+
+      // Write E2EE group session details to RTDB directly
+      try {
+        await rtdbSet(rtdbRef(rtdb, `chats/${newGroupId}`), newGroupData);
+      } catch (re) {
+        console.warn("Could not write group session details to RTDB:", re);
+      }
 
       const sysMsgId = `msg_system_${Date.now()}`;
       const sysMsgText = isGroupPublic 
@@ -1045,7 +1220,11 @@ export default function ChatDashboard() {
         decryptedText: sysMsgText
       };
 
-      await addDoc(collection(db, "chats", newGroupId, "messages"), sysMsg);
+      try {
+        await addDoc(collection(db, "chats", newGroupId, "messages"), sysMsg);
+      } catch (fe) {
+        console.warn("Could not write group system message to Firestore:", fe);
+      }
 
       // Mirror group metadata and system message to RTDB
       try {
@@ -1089,21 +1268,42 @@ export default function ChatDashboard() {
 
     try {
       const myPubKey = await getSecureKey("identity_public_key");
-      const chatRef = doc(db, "chats", chatId);
-      const chatSnap = await getDoc(chatRef);
+      
+      let chatData: any = null;
+      // 1. Try fetching public group from RTDB first
+      try {
+        const rtdbChatSnap = await rtdbGet(rtdbRef(rtdb, `chats/${chatId}`));
+        if (rtdbChatSnap.exists()) {
+          chatData = rtdbChatSnap.val();
+        }
+      } catch (re) {
+        console.warn("Could not fetch public group from RTDB:", re);
+      }
 
-      if (chatSnap.exists()) {
-        const chatData = chatSnap.data();
-        
-        if (chatData.members.includes(profile.uid)) {
+      // 2. Try Firestore fallback if not found in RTDB
+      if (!chatData) {
+        try {
+          const chatSnap = await getDoc(doc(db, "chats", chatId));
+          if (chatSnap.exists()) {
+            chatData = chatSnap.data();
+          }
+        } catch (fe) {
+          console.warn("Could not fetch public group from Firestore:", fe);
+        }
+      }
+
+      if (chatData) {
+        const membersArray = chatData.members ? Object.values(chatData.members) : [];
+        if (membersArray.includes(profile.uid)) {
           setActiveChatId(chatId);
           setShowNewChatModal(false);
           setNewChatLoading(false);
           return;
         }
 
-        const updatedMembers = [...chatData.members, profile.uid];
-        const updatedMemberUsernames = [...(chatData.memberUsernames || []), profile.username];
+        const updatedMembers = [...membersArray, profile.uid];
+        const memberUsernamesArray = chatData.memberUsernames ? Object.values(chatData.memberUsernames) : [];
+        const updatedMemberUsernames = [...memberUsernamesArray, profile.username];
         const updatedMemberNames = {
           ...(chatData.memberNames || {}),
           [profile.uid]: profile.displayName || profile.username
@@ -1113,12 +1313,33 @@ export default function ChatDashboard() {
           [profile.uid]: myPubKey || "MOCK_X25519_IDENTITY_PUBLIC_KEY_BASE64"
         };
 
-        await updateDoc(chatRef, {
+        const updatedChatData = {
+          ...chatData,
+          chatId,
           members: updatedMembers,
           memberUsernames: updatedMemberUsernames,
           memberNames: updatedMemberNames,
           memberPublicKeys: updatedMemberPublicKeys
-        });
+        };
+
+        // Write updated session to RTDB
+        try {
+          await rtdbSet(rtdbRef(rtdb, `chats/${chatId}`), updatedChatData);
+        } catch (re) {
+          console.warn("Could not update public group members in RTDB:", re);
+        }
+
+        // Backup update to Firestore (if permissions allow)
+        try {
+          await updateDoc(doc(db, "chats", chatId), {
+            members: updatedMembers,
+            memberUsernames: updatedMemberUsernames,
+            memberNames: updatedMemberNames,
+            memberPublicKeys: updatedMemberPublicKeys
+          });
+        } catch (fe) {
+          console.warn("Could not write public group member updates to Firestore:", fe);
+        }
 
         const sysMsgId = `msg_system_${Date.now()}`;
         const sysMsgText = `👋 ${profile.displayName || profile.username} joined the public group.`;
@@ -1129,7 +1350,11 @@ export default function ChatDashboard() {
           decryptedText: sysMsgText
         };
 
-        await addDoc(collection(db, "chats", chatId, "messages"), sysMsg);
+        try {
+          await addDoc(collection(db, "chats", chatId, "messages"), sysMsg);
+        } catch (fe) {
+          console.warn("Could not write join system message to Firestore:", fe);
+        }
 
         // Mirror system message and metadata to RTDB
         try {
@@ -2258,8 +2483,14 @@ export default function ChatDashboard() {
                                 publicKey: "MOCK_X25519_PEER_PUBLIC_KEY_BASE64_INTEGRITY_CHECK",
                                 createdAt: Date.now()
                               };
-                              // Write to Firestore and RTDB
-                              await setDoc(doc(db, "users", peerUsername), peerProfile);
+                              // Write to Firestore (backup write, gracefully bypasses permissions check)
+                              try {
+                                await setDoc(doc(db, "users", peerUsername), peerProfile);
+                              } catch (fe) {
+                                console.warn("Firestore test peer creation skipped due to permissions:", fe);
+                              }
+                              
+                              // Write E2EE test peer directory info directly to RTDB
                               await rtdbSet(rtdbRef(rtdb, `users/${peerUsername}`), {
                                 uid: peerUid,
                                 displayName: peerProfile.displayName,

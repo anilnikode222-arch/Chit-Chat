@@ -174,8 +174,12 @@ export default function AuthPortal() {
           createdAt: Date.now()
         };
 
-        // Save user profile to Firestore
-        await setDoc(doc(db, "users", username.toLowerCase()), profileData);
+        // Save user profile to Firestore (backup write, gracefully bypasses permissions check)
+        try {
+          await setDoc(doc(db, "users", username.toLowerCase()), profileData);
+        } catch (fe) {
+          console.warn("Could not save user profile to Firestore:", fe);
+        }
 
         // Save username to UID mapping in Realtime Database
         try {
@@ -262,6 +266,24 @@ export default function AuthPortal() {
             deviceAttestation: fetchedData.deviceAttestation || fingerprint,
             createdAt: fetchedData.createdAt || Date.now()
           };
+        } else {
+          // Fallback: Retrieve profile from RTDB (e.g. if Firestore was wiped)
+          try {
+            const rtdbUserSnap = await rtdbGet(rtdbRef(rtdb, `users/${username.toLowerCase()}`));
+            if (rtdbUserSnap.exists()) {
+              const fetchedData = rtdbUserSnap.val();
+              profileData = {
+                uid: fetchedData.uid || profileData.uid,
+                username: username.toLowerCase(),
+                displayName: fetchedData.displayName || username.toUpperCase(),
+                publicKey: fetchedData.publicKey || profileData.publicKey,
+                deviceAttestation: fingerprint,
+                createdAt: fetchedData.createdAt || Date.now()
+              };
+            }
+          } catch (re) {
+            console.warn("RTDB profile retrieval fallback failed:", re);
+          }
         }
       } catch (err) {
         console.warn("Could not load user profile from Firestore. Operating in offline/fallback mode.", err);
