@@ -23,9 +23,10 @@ import {
 import { useAuthStore } from "../store/authStore";
 import { generateX25519KeyPair } from "../crypto/keys";
 import { saveSecureKey } from "../crypto/storage";
-import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
-import { auth, db } from "../lib/firebase";
+import { signInWithPopup, GoogleAuthProvider, signInAnonymously } from "firebase/auth";
+import { auth, db, rtdb } from "../lib/firebase";
 import { doc, getDoc, setDoc } from "firebase/firestore";
+import { ref as rtdbRef, set as rtdbSet, push as rtdbPush, serverTimestamp as rtdbTimestamp, onDisconnect as rtdbOnDisconnect } from "firebase/database";
 
 export default function AuthPortal() {
   const router = useRouter();
@@ -142,7 +143,16 @@ export default function AuthPortal() {
       const success = await unlockVault(passphrase, username.toLowerCase());
       
       if (success) {
-        const userUid = googleAuthenticated ? `google_${googleEmail.split("@")[0]}` : `uid_${Math.random().toString(36).substr(2, 9)}`;
+        // Authenticate client with Firebase Auth anonymously if not already signed in
+        if (!auth.currentUser) {
+          try {
+            await signInAnonymously(auth);
+          } catch (ae) {
+            console.warn("Anonymous authentication failed, proceeding in offline-first mode:", ae);
+          }
+        }
+
+        const userUid = googleAuthenticated ? `google_${googleEmail.split("@")[0]}` : `uid_${username.toLowerCase()}`;
         const userEmail = googleAuthenticated ? googleEmail : `${username}@chitchat.sec`;
         
         const profileData = {
@@ -156,6 +166,30 @@ export default function AuthPortal() {
 
         // Save user profile to Firestore
         await setDoc(doc(db, "users", username.toLowerCase()), profileData);
+
+        // Save username to UID mapping in Realtime Database
+        try {
+          await rtdbSet(rtdbRef(rtdb, `users/${username.toLowerCase()}`), {
+            uid: userUid,
+            displayName: displayName || username,
+            publicKey: identityKeys.publicKey,
+            createdAt: rtdbTimestamp()
+          });
+        } catch (re) {
+          console.warn("Could not save username to RTDB:", re);
+        }
+
+        // Log registration activity in RTDB
+        try {
+          const activityRef = rtdbPush(rtdbRef(rtdb, `activities/${userUid}`));
+          await rtdbSet(activityRef, {
+            action: "User Registered",
+            timestamp: rtdbTimestamp(),
+            details: "Traditional E2EE vault enrolled successfully."
+          });
+        } catch (re) {
+          console.warn("Could not log registration activity to RTDB:", re);
+        }
 
         const mockUser = {
           uid: userUid,
@@ -225,6 +259,15 @@ export default function AuthPortal() {
 
       const success = await unlockVault(passphrase, username.toLowerCase());
       if (success) {
+        // Authenticate client with Firebase Auth anonymously if not already signed in
+        if (!auth.currentUser) {
+          try {
+            await signInAnonymously(auth);
+          } catch (ae) {
+            console.warn("Anonymous authentication failed, proceeding in offline-first mode:", ae);
+          }
+        }
+
         const mockUser = {
           uid: profileData.uid,
           email: `${username}@chitchat.sec`,
@@ -233,6 +276,35 @@ export default function AuthPortal() {
 
         setUser(mockUser);
         setProfile(profileData);
+
+        // Toggle presence to online in RTDB
+        try {
+          const myUid = profileData.uid;
+          const statusRef = rtdbRef(rtdb, `status/${myUid}`);
+          await rtdbSet(statusRef, {
+            status: "online",
+            lastChanged: rtdbTimestamp(),
+            username: username.toLowerCase()
+          });
+
+          // Set up onDisconnect to automatically toggle to offline
+          const myOnDisconnect = rtdbOnDisconnect(statusRef);
+          await myOnDisconnect.set({
+            status: "offline",
+            lastChanged: rtdbTimestamp(),
+            username: username.toLowerCase()
+          });
+
+          // Log unlock activity
+          const activityRef = rtdbPush(rtdbRef(rtdb, `activities/${myUid}`));
+          await rtdbSet(activityRef, {
+            action: "Vault Unlocked",
+            timestamp: rtdbTimestamp(),
+            details: "Cryptographic vault unlocked and session activated."
+          });
+        } catch (re) {
+          console.warn("Could not register presence or log unlock activity in RTDB:", re);
+        }
 
         setTimeout(() => {
           setIsLoading(false);

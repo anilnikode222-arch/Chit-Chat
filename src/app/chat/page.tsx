@@ -47,7 +47,7 @@ import { useChatStore, ChatMessage, ChatSession } from "../../store/chatStore";
 import { encryptPayload, decryptPayload, encryptFile, decryptFile } from "../../crypto/ratchet";
 import { getSecureKey, saveSecureKey } from "../../crypto/storage";
 import { computeSharedSecret } from "../../crypto/keys";
-import { db } from "../../lib/firebase";
+import { db, rtdb } from "../../lib/firebase";
 import { 
   collection, 
   doc, 
@@ -61,6 +61,15 @@ import {
   orderBy, 
   onSnapshot 
 } from "firebase/firestore";
+import { 
+  ref as rtdbRef, 
+  set as rtdbSet, 
+  push as rtdbPush, 
+  serverTimestamp as rtdbTimestamp, 
+  onDisconnect as rtdbOnDisconnect, 
+  onValue as rtdbOnValue, 
+  get as rtdbGet 
+} from "firebase/database";
 
 // Define mock contacts
 const INITIAL_SESSIONS: ChatSession[] = [
@@ -264,6 +273,11 @@ export default function ChatDashboard() {
     setRatchetRK("A8F90E1C934E27189E5AB2F0302E193A17B809FEE283CD98902A91D347890BC1");
     setRatchetCKSend("C9A174E18374A92EF030AC125B81C92EF3A917EEB3A8B74C829EF748AC19EF38");
     setRatchetCKRecv("B718D02E3917AC82EF3A90FE1938DC82FBE03AC12574A91EF02B84AC1293EF18");
+
+    // Proactively initialize with mock sessions so the UI starts populated instantly
+    if (chats.length === 0) {
+      setChats(INITIAL_SESSIONS);
+    }
   }, []);
 
   const updateLocalKeyringMonitor = async (channelKey: Uint8Array) => {
@@ -276,6 +290,53 @@ export default function ChatDashboard() {
       console.error("Monitor key conversion error:", e);
     }
   };
+
+  // Real-time presence synchronization via RTDB
+  useEffect(() => {
+    if (!profile?.uid) return;
+
+    const myUid = profile.uid;
+    const connectedRef = rtdbRef(rtdb, ".info/connected");
+    const statusRef = rtdbRef(rtdb, `status/${myUid}`);
+
+    const unsubscribeConnected = rtdbOnValue(connectedRef, async (snap) => {
+      if (snap.val() === true) {
+        try {
+          await rtdbSet(statusRef, {
+            status: "online",
+            lastChanged: rtdbTimestamp(),
+            username: profile.username || "anonymous"
+          });
+
+          const myOnDisconnect = rtdbOnDisconnect(statusRef);
+          await myOnDisconnect.set({
+            status: "offline",
+            lastChanged: rtdbTimestamp(),
+            username: profile.username || "anonymous"
+          });
+        } catch (err) {
+          console.error("Error setting presence connection in RTDB:", err);
+        }
+      }
+    });
+
+    const allStatusRef = rtdbRef(rtdb, "status");
+    const unsubscribeStatus = rtdbOnValue(allStatusRef, (snap) => {
+      const data = snap.val();
+      if (data) {
+        Object.entries(data).forEach(([userId, val]: [string, any]) => {
+          if (userId !== myUid && val && val.status) {
+            updatePresence(userId, val.status, val.lastChanged || Date.now());
+          }
+        });
+      }
+    });
+
+    return () => {
+      unsubscribeConnected();
+      unsubscribeStatus();
+    };
+  }, [profile, updatePresence]);
 
   // Real-time Firestore subscriptions for active Chats
   useEffect(() => {
@@ -320,7 +381,8 @@ export default function ChatDashboard() {
         setChats(chatSessions);
       }
     }, (error) => {
-      console.error("Error subscribing to chats:", error);
+      console.error("Error subscribing to chats, falling back to mock sessions:", error);
+      setChats(INITIAL_SESSIONS);
     });
 
     return () => {
@@ -328,7 +390,7 @@ export default function ChatDashboard() {
     };
   }, [profile, setChats]);
 
-  // Real-time Firestore subscriptions for Messages in active chat
+  // Real-time RTDB subscriptions for Messages in active chat
   useEffect(() => {
     if (!activeChatId || !profile?.uid) return;
 
@@ -337,12 +399,9 @@ export default function ChatDashboard() {
       return;
     }
 
-    const messagesQuery = query(
-      collection(db, "chats", activeChatId, "messages"),
-      orderBy("timestamp", "asc")
-    );
+    const messagesRef = rtdbRef(rtdb, `chats/${activeChatId}/messages`);
 
-    const unsubscribeMessages = onSnapshot(messagesQuery, async (snapshot) => {
+    const unsubscribeMessages = rtdbOnValue(messagesRef, async (snapshot) => {
       const msgList: ChatMessage[] = [];
       const activeSession = chats.find(c => c.chatId === activeChatId);
       
@@ -397,41 +456,50 @@ export default function ChatDashboard() {
         }
       }
 
-      for (const docSnap of snapshot.docs) {
-        const data = docSnap.data();
-        let decryptedText = data.decryptedText;
-        
-        if (data.cipherText && !decryptedText) {
-          try {
-            decryptedText = await decryptPayload({
-              cipherText: data.cipherText,
-              iv: data.iv,
-              tag: data.tag
-            }, decryptionKey);
-          } catch (e) {
-            console.warn("E2EE payload decryption mismatch:", e);
-            decryptedText = "🔒 [E2EE Payload - Encrypted Server-side]";
-          }
-        }
+      const val = snapshot.val();
+      if (val) {
+        const sortedMessages = Object.entries(val)
+          .map(([id, data]: [string, any]) => ({
+            messageId: data.messageId || id,
+            ...data
+          }))
+          .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
-        msgList.push({
-          messageId: data.messageId || docSnap.id,
-          senderId: data.senderId,
-          timestamp: data.timestamp,
-          cipherText: data.cipherText,
-          iv: data.iv,
-          tag: data.tag,
-          decryptedText,
-          status: data.status || "sent",
-          replyToMessageId: data.replyToMessageId || null,
-          mediaMetadata: data.mediaMetadata || undefined
-        });
+        for (const data of sortedMessages) {
+          let decryptedText = data.decryptedText;
+          
+          if (data.cipherText && !decryptedText) {
+            try {
+              decryptedText = await decryptPayload({
+                cipherText: data.cipherText,
+                iv: data.iv,
+                tag: data.tag
+              }, decryptionKey);
+            } catch (e) {
+              console.warn("E2EE payload decryption mismatch:", e);
+              decryptedText = "🔒 [E2EE Payload - Encrypted Server-side]";
+            }
+          }
+
+          msgList.push({
+            messageId: data.messageId,
+            senderId: data.senderId,
+            timestamp: data.timestamp,
+            cipherText: data.cipherText,
+            iv: data.iv,
+            tag: data.tag,
+            decryptedText,
+            status: data.status || "sent",
+            replyToMessageId: data.replyToMessageId || null,
+            mediaMetadata: data.mediaMetadata || undefined
+          });
+        }
       }
 
       setMessages(activeChatId, msgList);
       updateLocalKeyringMonitor(decryptionKey);
     }, (error) => {
-      console.error("Error subscribing to messages:", error);
+      console.error("Error subscribing to RTDB messages:", error);
     });
 
     return () => {
@@ -700,6 +768,32 @@ export default function ChatDashboard() {
           }
         });
 
+        // Mirror E2EE message and metadata to RTDB
+        try {
+          await rtdbSet(rtdbRef(rtdb, `chats/${activeChatId}/messages/${messageId}`), newMessage);
+          await rtdbSet(rtdbRef(rtdb, `chats/${activeChatId}/metadata`), {
+            lastMessage: {
+              senderId: profile.uid,
+              timestamp: Date.now(),
+              textPreview: `🔒 Encrypted Media (${attachment.type.split("/")[0]})`
+            }
+          });
+        } catch (re) {
+          console.warn("Could not mirror E2EE media message to RTDB:", re);
+        }
+
+        // Log Message Sent activity in RTDB
+        try {
+          const activityRef = rtdbPush(rtdbRef(rtdb, `activities/${profile.uid}`));
+          await rtdbSet(activityRef, {
+            action: "Message Sent",
+            timestamp: rtdbTimestamp(),
+            details: `Encrypted E2EE Media sent successfully in chat: ${activeChatId}`
+          });
+        } catch (re) {
+          console.warn("Could not log Message Sent activity in RTDB:", re);
+        }
+
         setAttachment(null);
       } else {
         const envelope = await encryptPayload(textToSend, encryptionKey);
@@ -723,6 +817,32 @@ export default function ChatDashboard() {
             textPreview: textToSend
           }
         });
+
+        // Mirror E2EE message and metadata to RTDB
+        try {
+          await rtdbSet(rtdbRef(rtdb, `chats/${activeChatId}/messages/${messageId}`), newMessage);
+          await rtdbSet(rtdbRef(rtdb, `chats/${activeChatId}/metadata`), {
+            lastMessage: {
+              senderId: profile.uid,
+              timestamp: Date.now(),
+              textPreview: textToSend
+            }
+          });
+        } catch (re) {
+          console.warn("Could not mirror E2EE text message to RTDB:", re);
+        }
+
+        // Log Message Sent activity in RTDB
+        try {
+          const activityRef = rtdbPush(rtdbRef(rtdb, `activities/${profile.uid}`));
+          await rtdbSet(activityRef, {
+            action: "Message Sent",
+            timestamp: rtdbTimestamp(),
+            details: `Encrypted E2EE text message sent successfully in chat: ${activeChatId}`
+          });
+        } catch (re) {
+          console.warn("Could not log Message Sent activity in RTDB:", re);
+        }
       }
 
       rotateRatchetKeys();
@@ -803,12 +923,41 @@ export default function ChatDashboard() {
 
       await setDoc(chatRef, newChatData);
       
-      await addDoc(collection(db, "chats", existingChatId, "messages"), {
-        messageId: `msg_system_${Date.now()}`,
+      const sysMsgId = `msg_system_${Date.now()}`;
+      const sysMsg = {
+        messageId: sysMsgId,
         senderId: "system",
         timestamp: Date.now(),
         decryptedText: "🔒 Direct E2EE messaging channel successfully computed via X25519 Diffie-Hellman handshakes. Secrecy keys derived client-side."
-      });
+      };
+
+      await addDoc(collection(db, "chats", existingChatId, "messages"), sysMsg);
+
+      // Mirror system message and metadata to RTDB
+      try {
+        await rtdbSet(rtdbRef(rtdb, `chats/${existingChatId}/messages/${sysMsgId}`), sysMsg);
+        await rtdbSet(rtdbRef(rtdb, `chats/${existingChatId}/metadata`), {
+          lastMessage: {
+            senderId: "system",
+            timestamp: Date.now(),
+            textPreview: "E2EE secure session initiated"
+          }
+        });
+      } catch (e) {
+        console.warn("Could not write system message or metadata to RTDB:", e);
+      }
+
+      // Log Pairwise Session Initiated activity in RTDB
+      try {
+        const activityRef = rtdbPush(rtdbRef(rtdb, `activities/${profile.uid}`));
+        await rtdbSet(activityRef, {
+          action: "Pairwise Session Initiated",
+          timestamp: rtdbTimestamp(),
+          details: `X25519 Diffie-Hellman handshake completed with user: ${cleanUsername}`
+        });
+      } catch (e) {
+        console.warn("Could not log Pairwise Session Initiated activity:", e);
+      }
 
       setActiveChatId(existingChatId);
       setShowNewChatModal(false);
@@ -875,14 +1024,45 @@ export default function ChatDashboard() {
 
       await setDoc(doc(db, "chats", newGroupId), newGroupData);
 
-      await addDoc(collection(db, "chats", newGroupId, "messages"), {
-        messageId: `msg_system_${Date.now()}`,
+      const sysMsgId = `msg_system_${Date.now()}`;
+      const sysMsgText = isGroupPublic 
+        ? `🌍 Public Group Chat initialized. E2EE channel keys derived from public namespace.`
+        : `🔒 Private E2EE Group initialized. Session key encrypted for members using pairwise Curve25519 handshakes.`;
+
+      const sysMsg = {
+        messageId: sysMsgId,
         senderId: "system",
         timestamp: Date.now(),
-        decryptedText: isGroupPublic 
-          ? `🌍 Public Group Chat initialized. E2EE channel keys derived from public namespace.`
-          : `🔒 Private E2EE Group initialized. Session key encrypted for members using pairwise Curve25519 handshakes.`
-      });
+        decryptedText: sysMsgText
+      };
+
+      await addDoc(collection(db, "chats", newGroupId, "messages"), sysMsg);
+
+      // Mirror group metadata and system message to RTDB
+      try {
+        await rtdbSet(rtdbRef(rtdb, `chats/${newGroupId}/messages/${sysMsgId}`), sysMsg);
+        await rtdbSet(rtdbRef(rtdb, `chats/${newGroupId}/metadata`), {
+          lastMessage: {
+            senderId: "system",
+            timestamp: Date.now(),
+            textPreview: `${cleanGroupName} created securely`
+          }
+        });
+      } catch (e) {
+        console.warn("Could not write group system message or metadata to RTDB:", e);
+      }
+
+      // Log Secure Group Created activity in RTDB
+      try {
+        const activityRef = rtdbPush(rtdbRef(rtdb, `activities/${profile.uid}`));
+        await rtdbSet(activityRef, {
+          action: "Secure Group Created",
+          timestamp: rtdbTimestamp(),
+          details: `Group "${cleanGroupName}" (${isGroupPublic ? 'public' : 'private'}) created successfully.`
+        });
+      } catch (e) {
+        console.warn("Could not log Secure Group Created activity to RTDB:", e);
+      }
 
       setActiveChatId(newGroupId);
       setShowNewChatModal(false);
@@ -931,12 +1111,42 @@ export default function ChatDashboard() {
           memberPublicKeys: updatedMemberPublicKeys
         });
 
-        await addDoc(collection(db, "chats", chatId, "messages"), {
-          messageId: `msg_system_${Date.now()}`,
+        const sysMsgId = `msg_system_${Date.now()}`;
+        const sysMsgText = `👋 ${profile.displayName || profile.username} joined the public group.`;
+        const sysMsg = {
+          messageId: sysMsgId,
           senderId: "system",
           timestamp: Date.now(),
-          decryptedText: `👋 ${profile.displayName || profile.username} joined the public group.`
-        });
+          decryptedText: sysMsgText
+        };
+
+        await addDoc(collection(db, "chats", chatId, "messages"), sysMsg);
+
+        // Mirror system message and metadata to RTDB
+        try {
+          await rtdbSet(rtdbRef(rtdb, `chats/${chatId}/messages/${sysMsgId}`), sysMsg);
+          await rtdbSet(rtdbRef(rtdb, `chats/${chatId}/metadata`), {
+            lastMessage: {
+              senderId: "system",
+              timestamp: Date.now(),
+              textPreview: sysMsgText
+            }
+          });
+        } catch (e) {
+          console.warn("Could not write join system message or metadata to RTDB:", e);
+        }
+
+        // Log Group Joined activity in RTDB
+        try {
+          const activityRef = rtdbPush(rtdbRef(rtdb, `activities/${profile.uid}`));
+          await rtdbSet(activityRef, {
+            action: "Group Joined",
+            timestamp: rtdbTimestamp(),
+            details: `Joined public group "${chatData.displayName || chatId}".`
+          });
+        } catch (e) {
+          console.warn("Could not log Group Joined activity to RTDB:", e);
+        }
 
         setActiveChatId(chatId);
         setShowNewChatModal(false);
@@ -952,6 +1162,19 @@ export default function ChatDashboard() {
     const randHex = () => Math.floor(Math.random() * 0xffffffff).toString(16).padEnd(8, 'f').toUpperCase();
     setRatchetRK((prev) => randHex() + prev.substring(8));
     setRatchetCKSend((prev) => randHex() + prev.substring(8));
+
+    if (profile?.uid) {
+      try {
+        const activityRef = rtdbPush(rtdbRef(rtdb, `activities/${profile.uid}`));
+        rtdbSet(activityRef, {
+          action: "Double Ratchet Rotation",
+          timestamp: rtdbTimestamp(),
+          details: "Ephemeral session key rotated for forward-secrecy protection."
+        });
+      } catch (e) {
+        console.warn("Could not log key rotation activity:", e);
+      }
+    }
   };
 
   const triggerSimulatedReply = (userText: string) => {
@@ -1000,6 +1223,20 @@ export default function ChatDashboard() {
     setCallType(type);
     setShowCallModal(true);
     setCallState('initiating');
+
+    // Log Voice/Video Call Signaled activity in RTDB
+    if (profile?.uid) {
+      try {
+        const activityRef = rtdbPush(rtdbRef(rtdb, `activities/${profile.uid}`));
+        rtdbSet(activityRef, {
+          action: "Voice/Video Call Signaled",
+          timestamp: rtdbTimestamp(),
+          details: `Secure WebRTC ${type} call signaling handshake initiated with active node.`
+        });
+      } catch (e) {
+        console.warn("Could not log call signaling activity to RTDB:", e);
+      }
+    }
     
     // Simulate signaling WebRTC lifecycle
     setTimeout(() => {
@@ -1062,8 +1299,8 @@ export default function ChatDashboard() {
               <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white font-extrabold text-sm shadow-md shadow-blue-500/10">
                 {profile?.displayName?.substring(0, 2).toUpperCase() || "CC"}
               </div>
-              <div>
-                <h3 className="text-sm font-bold text-gray-900 dark:text-white line-clamp-1">
+              <div className="min-w-0 max-w-[125px]">
+                <h3 className="text-sm font-bold text-gray-900 dark:text-white truncate" title={profile?.displayName || "Local Node"}>
                   {profile?.displayName || "Local Node"}
                 </h3>
                 <p className="text-3xs text-gray-400 dark:text-zinc-500 font-bold uppercase tracking-wider flex items-center gap-1">
@@ -1166,10 +1403,16 @@ export default function ChatDashboard() {
                             <Users className="w-5 h-5" />
                           </div>
                         )}
-                        {/* Mock active presence status */}
-                        {c.type === 'private' && (
-                          <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white dark:border-zinc-900" />
-                        )}
+                        {/* Real-time active presence status */}
+                        {c.type === 'private' && (() => {
+                          const otherUid = c.members?.find((m: string) => m !== profile?.uid);
+                          const isOnline = otherUid ? presenceList[otherUid]?.status === 'online' : false;
+                          return (
+                            <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white dark:border-zinc-900 ${
+                              isOnline ? 'bg-emerald-500' : 'bg-gray-400 dark:bg-zinc-600'
+                            }`} />
+                          );
+                        })()}
                       </div>
 
                       {/* Chat text info */}
@@ -1277,9 +1520,15 @@ export default function ChatDashboard() {
                         <Users className="w-5 h-5" />
                       </div>
                     )}
-                    {currentChat?.type === 'private' && (
-                      <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white dark:border-zinc-900" />
-                    )}
+                    {currentChat?.type === 'private' && (() => {
+                      const otherUid = currentChat.members?.find((m: string) => m !== profile?.uid);
+                      const isOnline = otherUid ? presenceList[otherUid]?.status === 'online' : false;
+                      return (
+                        <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-zinc-900 ${
+                          isOnline ? 'bg-emerald-500' : 'bg-gray-400 dark:bg-zinc-600'
+                        }`} />
+                      );
+                    })()}
                   </div>
 
                   <div>
