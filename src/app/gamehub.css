@@ -1,0 +1,279 @@
+/* ==========================================================================
+   GAMEHUB 2D DESIGN SYSTEM & CSS ENGINE
+   ========================================================================== */
+
+/* HSL Tailored Neon & Slate Themes */
+:root {
+  --hub-bg: #090a10;
+  --hub-card-bg: rgba(14, 18, 30, 0.45);
+  --hub-border: rgba(255, 255, 255, 0.05);
+  --hub-text: #f1f5f9;
+  --hub-text-muted: #94a3b8;
+
+  /* Neon Glow Accents */
+  --neon-blue: #06b6d4;
+  --neon-blue-glow: rgba(6, 182, 212, 0.35);
+  --neon-purple: #a855f7;
+  --neon-purple-glow: rgba(168, 85, 247, 0.35);
+  --neon-green: #10b981;
+  --neon-green-glow: rgba(16, 185, 129, 0.35);
+  --neon-red: #ef4444;
+  --neon-red-glow: rgba(239, 68, 68, 0.35);
+  --neon-yellow: #f59e0b;
+  --neon-yellow-glow: rgba(245, 158, 11, 0.35);
+}
+
+/* Cybernetic Glowing Background Grid */
+.hub-portal {
+  background: var(--hub-bg);
+  color: var(--hub-text);
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.hub-portal::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: 
+    linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Glowing Aura Orbs */
+.aura-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(120px);
+  pointer-events: none;
+  opacity: 0.25;
+  z-index: 0;
+}
+
+.aura-blue {
+  top: -10%;
+  left: 15%;
+  width: 50vw;
+  height: 50vw;
+  background: radial-gradient(circle, var(--neon-blue) 0%, transparent 70%);
+}
+
+.aura-purple {
+  bottom: -15%;
+  right: 10%;
+  width: 60vw;
+  height: 60vw;
+  background: radial-gradient(circle, var(--neon-purple) 0%, transparent 70%);
+}
+
+/* Premium Glassmorphic Panels */
+.glass-card {
+  background: var(--hub-card-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--hub-border);
+  border-radius: 24px;
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+  position: relative;
+  overflow: hidden;
+}
+
+.glass-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, transparent 100%);
+  pointer-events: none;
+}
+
+/* Cyber Neon Buttons */
+.btn-neon {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--hub-border);
+  color: var(--hub-text);
+  padding: 12px 24px;
+  border-radius: 14px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-neon:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px -3px rgba(255, 255, 255, 0.1);
+}
+
+.btn-neon-blue {
+  background: rgba(6, 182, 212, 0.1);
+  border-color: rgba(6, 182, 212, 0.2);
+  color: var(--neon-blue);
+}
+
+.btn-neon-blue:hover {
+  background: var(--neon-blue);
+  border-color: var(--neon-blue);
+  color: #000;
+  box-shadow: 0 0 20px var(--neon-blue-glow);
+}
+
+.btn-neon-purple {
+  background: rgba(168, 85, 247, 0.1);
+  border-color: rgba(168, 85, 247, 0.2);
+  color: var(--neon-purple);
+}
+
+.btn-neon-purple:hover {
+  background: var(--neon-purple);
+  border-color: var(--neon-purple);
+  color: #fff;
+  box-shadow: 0 0 20px var(--neon-purple-glow);
+}
+
+/* Glowing Neon Text */
+.glow-text-blue {
+  text-shadow: 0 0 10px var(--neon-blue-glow);
+  color: var(--neon-blue);
+}
+
+.glow-text-purple {
+  text-shadow: 0 0 10px var(--neon-purple-glow);
+  color: var(--neon-purple);
+}
+
+/* Custom Interactive Game Cards */
+.game-card {
+  position: relative;
+  cursor: pointer;
+}
+
+.game-card:hover {
+  transform: translateY(-8px) scale(1.02);
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.7);
+}
+
+.game-card::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 0.4s;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+.game-card-chess:hover::after {
+  background: radial-gradient(circle at 50% 50%, rgba(6, 182, 212, 0.08) 0%, transparent 60%);
+  opacity: 1;
+}
+
+.game-card-ludo:hover::after {
+  background: radial-gradient(circle at 50% 50%, rgba(168, 85, 247, 0.08) 0%, transparent 60%);
+  opacity: 1;
+}
+
+.game-card-chess:hover {
+  border-color: rgba(6, 182, 212, 0.4);
+  box-shadow: 0 15px 35px -10px rgba(6, 182, 212, 0.15);
+}
+
+.game-card-ludo:hover {
+  border-color: rgba(168, 85, 247, 0.4);
+  box-shadow: 0 15px 35px -10px rgba(168, 85, 247, 0.15);
+}
+
+/* Custom Board Container scaling */
+.board-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 520px;
+  aspect-ratio: 1;
+  position: relative;
+}
+
+/* Ludo 3D Dice Spinner */
+.dice-cube {
+  width: 48px;
+  height: 48px;
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 0.8s cubic-bezier(0.2, 0.8, 0.2, 1.2);
+}
+
+.dice-face {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  background: #181b2a;
+  border: 2px solid var(--neon-purple);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 10px rgba(168, 85, 247, 0.3);
+}
+
+/* Web-Audio particles micro-animation */
+@keyframes particle-glow {
+  0%, 100% { transform: scale(1); opacity: 0.3; }
+  50% { transform: scale(1.15); opacity: 0.8; }
+}
+
+.glow-particle {
+  animation: particle-glow 3s infinite ease-in-out;
+}
+
+/* Custom chess piece animations */
+.chess-piece-active {
+  filter: drop-shadow(0 0 8px var(--neon-blue));
+  transform: scale(1.05);
+  cursor: grab;
+}
+
+.chess-cell-valid::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: var(--neon-blue);
+  border-radius: 50%;
+  opacity: 0.6;
+  animation: pulse-glow 1.5s infinite;
+}
+
+/* Particle Background system styles */
+.canvas-particles {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
